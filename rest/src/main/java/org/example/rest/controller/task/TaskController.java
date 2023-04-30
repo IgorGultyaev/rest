@@ -35,7 +35,7 @@ public class TaskController {
     }
 
     @GetMapping("/{taskID}")// /api/issues/1, /api/issues/2
-    public TaskGetByIdRS getByIdRS(
+    public TaskGetByIdRS getById(
 //            @PathVariable long taskID
             @PathVariable
             @Min(1)
@@ -44,10 +44,7 @@ public class TaskController {
         return this.service.getById(taskID);
     }
 
-    // GET /tasks?limit=10
 
-    // POST /tasks
-    // body: limit=10&offset=100
     @PostMapping
     public TaskCreateRS create(
             @RequestBody
@@ -58,7 +55,7 @@ public class TaskController {
     }
 
 
-    @PutMapping // нельзя одновременно маппить два метода на одинаковые пути и одинаковые HTTP-методы, если не указаны ограничения
+    @PutMapping // нельзя одновременно мапить два метода на одинаковые пути и одинаковые HTTP-методы, если не указаны ограничения
     public TaskUpdateByIdRS updateById(
             @RequestBody
             @Valid

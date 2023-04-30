@@ -2,35 +2,31 @@ package org.example.rest.service.task;
 
 
 import lombok.RequiredArgsConstructor;
-
+import lombok.extern.slf4j.Slf4j;
 import org.example.rest.domain.task.Task;
 import org.example.rest.dto.task.*;
 import org.example.rest.exception.AppForbiddenException;
 import org.example.rest.exception.AppNotFoundException;
 import org.example.rest.mapper.task.TaskMapper;
-import org.example.rest.security.AppAuthentication;
 import org.example.rest.security.AppUserDetails;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Service;
+import org.springframework.validation.annotation.Validated;
 
 import javax.validation.Valid;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-
+@Slf4j
 @Service
+@Validated
 @RequiredArgsConstructor
 public class TaskService {
     private final TaskMapper mapper; // <- @Autowired from constructor
-    //    private final List<Task> items = new ArrayList<>(256);
-//    private long nextId = 1;
     private final NamedParameterJdbcOperations operations;
-    private final AppAuthentication authentication;
     private final RowMapper<Task> rowMapper = (rs, rowNum) ->
             new Task(rs.getLong("id"),
                     rs.getLong("owner_id"),
@@ -38,7 +34,7 @@ public class TaskService {
                     rs.getObject("deadline", OffsetDateTime.class).toInstant(),
                     rs.getObject("created", OffsetDateTime.class).toInstant(),
                     rs.getBoolean("done"));
-
+    private AppUserDetails userDetails;
 
     public List<TaskGetAllRS> getAll(int limit, int offset) {
         List<Task> item = this.operations.query(
@@ -47,6 +43,7 @@ public class TaskService {
                         "deadline," +
                         "created ," +
                         "done ," +
+                        "AS content, closed, created" +
                         "FROM tasks" +
                         "ORDER BY id " +
                         "LIMIT :limit OFFSET :offset ",
@@ -57,7 +54,6 @@ public class TaskService {
     }
 
 
-
     public TaskGetByIdRS getById(long id) {
         return this.operations.query(
                         "SELECT id," +
@@ -65,6 +61,7 @@ public class TaskService {
                                 "deadline," +
                                 "created ," +
                                 "done ," +
+                                "AS content, closed, created" +
                                 "FROM tasks " +
                                 "WHERE id = :id " +
                                 "ORDER BY id LIMIT 1 ",
@@ -78,11 +75,10 @@ public class TaskService {
 
 
     public TaskCreateRS create(@Valid TaskCreateRQ requestDTO) {
-        if (this.authentication.isAnonymous()) {
+        if (this.userDetails.getAuthorities().contains(new SimpleGrantedAuthority("ROLE_ANONYMOUS"))) {
             throw new AppForbiddenException();
         }
-        Task task = this.mapper.fromTaskCreateRQ(requestDTO,
-                authentication.getPrincipal().getId());
+        Task task = this.mapper.fromTaskCreateRQ(requestDTO, this.userDetails.getId());
 
         return this.operations.query(
                         "INSERT INTO tasks (" +
@@ -110,114 +106,84 @@ public class TaskService {
 
     }
 
+    //TODO Изменять может только автор (владелец)
     public TaskUpdateByIdRS updateById(TaskUpdateByIdRQ requestDTO) {
-        if (this.authentication.isAnonymous()){
-            throw new AppForbiddenException();
-        }
 
-        AppUserDetails principal = this.authentication.getPrincipal();
-
-        if (principal.getRoles().contains("ROLE_ADMIN")) {
-            Task task = this.mapper.fromTaskUpdateByIdRQ(requestDTO, 0);
-
-
-        return this.operations.query(
-                        "UPDATE tasks SET" +
-                                "name= :name, " +
-                                "deadline = :deadline," +
-                                "done = :done" +
-                                "WHERE id = :id RETURNING " +
-                                "id," +
-                                "owner_id" +
-                                "name," +
-                                "deadline" +
-                                "created," +
-                                "done",
-                        Map.of(
-                                "id", task.getId(),
-                                "name", task.getName(),
-                                "deadline", Timestamp.from(task.getDeadline()),
-                                "done", task.isDone()
-                        ), /// TODO почему не могу дабавить поле? И почмуто сервер отрудается
-                        rowMapper)
-                .stream()
-                .findFirst()
-                .map(this.mapper::toTaskUpdateByIdRS)
-                .orElseThrow(AppNotFoundException::new);
-        }
-
-        Task task = this.mapper.fromTaskUpdateByIdRQ(requestDTO,
-                principal.getId());
+        Task task = this.mapper.fromTaskUpdateByIdRQ(requestDTO, this.userDetails.getId());
 
         long actualOwnerId = this.operations.query("SELECT owner_id" +
-                " FROM tasks " +
-                "WHERE id = :id",
+                                " FROM tasks " +
+                                "WHERE id = :id",
                         Map.of("id", task.getId()),
                         (rs, rowNum) -> rs.getLong("owner_id")
                 ).stream()
                 .findFirst()
                 .orElseThrow(AppNotFoundException::new);
 
-        if (actualOwnerId != principal.getId()) {
+        if (actualOwnerId == this.userDetails.getId()) {
+            return this.operations.query(
+                            "UPDATE tasks SET" +
+                                    "name = :name," +
+                                    "deadline = :deadline," +
+                                    "created = :created" +
+                                    "WHERE id = :id" +
+                                    "AND owner_id =:owner_id RETURNING" +
+                                    "id," +
+                                    "owner_id," +
+                                    "name, " +
+                                    "deadline," +
+                                    "created," +
+                                    "done",
+                            Map.of(
+                                    "id", task.getId(),
+                                    "owner_id", userDetails.getId(),
+                                    "name", task.getName(),
+                                    "deadline", task.getName(),
+                                    "created", task.getCreated(),
+                                    "done", task.isDone()
+                            ), // forbid null - NPE
+                            rowMapper
+                    )
+                    .stream()
+                    .findFirst()
+                    .map(this.mapper::toTaskUpdateByIdRS)
+                    .orElseThrow(AppNotFoundException::new);
+        } else {
             throw new AppForbiddenException();
         }
-        return this.operations.query(
-                        "UPDATE tasks SET" +
-                                "name = :name," +
-                                "deadline = :deadline," +
-                                "created = :created" +
-                                "WHERE id = :id" +
-                                "AND owner_id =:owner_id RETURNING" +
-                                "id," +
-                                "owner_id," +
-                                "name, " +
-                                "deadline," +
-                                "created," +
-                                "done",
-                        Map.of(
-                                "id", task.getId(),
-                                "owner_id", principal.getId(),
-                                "name", task.getName(),
-                                "deadline", task.getName(),
-                                "created", task.getCreated(),
-                                "done", task.isDone()
-                        ), // forbid null - NPE
-                        rowMapper
-                )
-                .stream()
-                .findFirst()
-                .map(this.mapper::toTaskUpdateByIdRS)
-                .orElseThrow(AppNotFoundException::new);
-// TODO продолжить отсюда
 
 
-//        private long id;
-//        private long ownerId;
-//        private String name;
-//        private Instant deadline;
-//        private Instant created;
-//        private boolean done;
     }
 
-// forbid null - NPE
 
+    // forbid null - NPE
+// TODO Удалять может только автор (владелец) или админ (роль админ)
     public void removeById(long id) {
-        boolean removed = this.operations.update(
-                "DELETE FROM tasks WHERE id = :id",
-                Map.of("id", id)
-        ) != 0;
-        if (!removed) {
+
+        long actualOwnerId = this.operations.query("SELECT owner_id FROM tasks WHERE id = :id",
+                        Map.of("id", id),
+                        (rs, rowNum) -> rs.getLong("owner_id")
+                ).stream()
+                .findFirst()
+                .orElseThrow(AppNotFoundException::new);
+
+        if ((this.userDetails.getAuthorities().contains(new SimpleGrantedAuthority("ROLE_ANONYMOUS"))) |
+                (actualOwnerId == this.userDetails.getId())) {
+            boolean removed = this.operations.update(
+                    "DELETE FROM tasks WHERE id = :id",
+                    Map.of(
+                            "id", id
+                    )
+            ) != 0;
+            if (!removed) {
+                throw new AppNotFoundException();
+            }
+            return;
+        } else {
             throw new AppNotFoundException();
         }
     }
 
-
-//    public void removeById(long id) {
-//        boolean removed = this.items.removeIf(o -> o.getId() == id);
-//        if (!removed) {
-//            throw new AppNotFoundException();
-//        }
-//    }
 }
 
 

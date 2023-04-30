@@ -247,8 +247,6 @@ public class IssueService {
     private final NamedParameterJdbcOperations operations;
     private final AppUserDetails userDetails;
     private final RowMapper<Issue> rowMapper = (rs, rowNum) -> new Issue(rs.getLong("id"), rs.getLong("owner_id"), rs.getString("name"), rs.getString("content"), rs.getBoolean("closed"), rs.getObject("created", OffsetDateTime.class).toInstant());
-
-
     public List<IssueGetAllRS> getAll(int limit, int offset) {
         // executeQuery <-
         // executeUpdate
